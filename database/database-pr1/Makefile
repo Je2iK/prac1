@@ -14,7 +14,7 @@ SOURCES = $(wildcard $(SRCDIR)/*.cpp)
 # Имена объектных файлов в obj/ (заменяем .cpp на .o)
 OBJECTS = $(SOURCES:$(SRCDIR)/%.cpp=$(OBJDIR)/%.o)
 # Имя исполняемого файла
-TARGET = docdb
+TARGET = database
 
 # Цель по умолчанию - сборка исполняемого файла
 all: $(TARGET)
