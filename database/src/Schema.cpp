@@ -1,9 +1,7 @@
 #include "Schema.hpp"
 #include <fstream>
 
-namespace docdb {
 
-// Загрузка схемы из JSON файла
 Schema Schema::loadFromFile(const filesystem::path& path) {
     ifstream f(path);
     if (!f.is_open()) {
@@ -19,12 +17,11 @@ Schema Schema::loadFromFile(const filesystem::path& path) {
         throw runtime_error("Structure in schema must be an object");
     }
     
-    // Парсинг таблиц и их колонок
     for (auto& [table_name, table_schema] : structure_json.items()) {
-        vector<string> columns;
+        Array<string> columns;
         if (table_schema.is_array()) {
             for (const auto& col : table_schema) {
-                columns.push_back(col.get<string>());
+                columns.append(col.get<string>());
             }
         }
         s.structure.insert(table_name, columns);
@@ -32,9 +29,6 @@ Schema Schema::loadFromFile(const filesystem::path& path) {
     return s;
 }
 
-// Получение списка всех таблиц
-adt::Array Schema::getTableNames() const {
+Array<string> Schema::getTableNames() const {
     return structure.getAllKeys();
-}
-
 } 

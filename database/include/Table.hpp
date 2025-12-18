@@ -1,12 +1,9 @@
 #pragma once
 
 #include <string>
-#include <vector>
 #include <filesystem>
 #include <functional>
-#include <nlohmann/json.hpp>
-
-namespace docdb {
+#include "../adt/Array.hpp"
 
 using namespace std;
 
@@ -14,23 +11,20 @@ struct TableConfig {
     string name;
     size_t tuplesLimit;
     filesystem::path basePath;
-    vector<string> columns;
+    Array<string> columns;
 };
 
 class Table {
 public:
     explicit Table(const TableConfig & config);
     
-    // Insert a new row. The values should correspond to the columns defined in schema (excluding PK).
-    void insert(const vector<string>& values);
+    void insert(const Array<string>& values);
     
-    // Delete rows that match the predicate.
-    void deleteRows(const function<bool(const vector<string>& row, const vector<string>& columns)>& predicate);
+    void deleteRows(const function<bool(const Array<string>& row, const Array<string>& columns)>& predicate);
 
-    // Get all rows from the table.
-    vector<vector<string>> scan();
+    Array<Array<string>> scan();
     
-    const vector<string>& getColumns() const;
+    const Array<string>& getColumns() const;
     string getPkColumnName() const;
 
 private:
@@ -38,15 +32,12 @@ private:
     void lock();
     void unlock();
     
-    // Helper to get all CSV files in order
-    vector<filesystem::path> getDataFiles() const;
+    Array<filesystem::path> getDataFiles() const;
     filesystem::path getCurrentDataFilePath() const;
     size_t getCurrentFileRowCount() const;
 
-    TableConfig config_;
-    string pkColumnName_;
-    filesystem::path pkSequenceFile_;
-    filesystem::path lockFile_;
-};
-
-} 
+    TableConfig config;
+    string pkColumnName;
+    filesystem::path pkSequenceFile;
+    filesystem::path lockFile;
+}; 

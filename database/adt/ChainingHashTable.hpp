@@ -1,11 +1,6 @@
 #pragma once
 
-#include <functional>
-#include <stdexcept>
-#include <vector>
 #include "Array.hpp"
-
-namespace adt {
 
 template <typename K, typename V>
 class ChainingHashTable {
@@ -18,7 +13,7 @@ private:
         Node(const K& k, const V& v) : key(k), value(v), next(nullptr) {}
     };
     
-    std::vector<Node*> buckets;
+    Array<Node*> buckets;
     size_t numElements;
     size_t capacity;
     static constexpr size_t DEFAULT_CAPACITY = 16;
@@ -31,13 +26,15 @@ private:
     void rehash() {
         size_t oldCapacity = capacity;
         capacity *= 2;
-        std::vector<Node*> oldBuckets = buckets;
-        buckets.clear();
-        buckets.resize(capacity, nullptr);
+        Array<Node*> oldBuckets = std::move(buckets);
+        buckets = Array<Node*>();
+        for (size_t i = 0; i < capacity; ++i) {
+            buckets.append(nullptr);
+        }
         numElements = 0;
         
         for (size_t i = 0; i < oldCapacity; ++i) {
-            Node* current = oldBuckets[i];
+            Node* current = oldBuckets.at(i);
             while (current != nullptr) {
                 Node* next = current->next;
                 insert(current->key, current->value);
@@ -49,12 +46,14 @@ private:
     
 public:
     ChainingHashTable() : numElements(0), capacity(DEFAULT_CAPACITY) {
-        buckets.resize(capacity, nullptr);
+        for (size_t i = 0; i < capacity; ++i) {
+            buckets.append(nullptr);
+        }
     }
     
     ~ChainingHashTable() {
         for (size_t i = 0; i < capacity; ++i) {
-            Node* current = buckets[i];
+            Node* current = buckets.at(i);
             while (current != nullptr) {
                 Node* next = current->next;
                 delete current;
@@ -63,12 +62,13 @@ public:
         }
     }
     
-    // Copy constructor
     ChainingHashTable(const ChainingHashTable& other) 
         : numElements(0), capacity(other.capacity) {
-        buckets.resize(capacity, nullptr);
+        for (size_t i = 0; i < capacity; ++i) {
+            buckets.append(nullptr);
+        }
         for (size_t i = 0; i < other.capacity; ++i) {
-            Node* current = other.buckets[i];
+            Node* current = other.buckets.at(i);
             while (current != nullptr) {
                 insert(current->key, current->value);
                 current = current->next;
@@ -76,12 +76,11 @@ public:
         }
     }
     
-    // Copy assignment
     ChainingHashTable& operator=(const ChainingHashTable& other) {
         if (this != &other) {
             // Clear current data
             for (size_t i = 0; i < capacity; ++i) {
-                Node* current = buckets[i];
+                Node* current = buckets.at(i);
                 while (current != nullptr) {
                     Node* next = current->next;
                     delete current;
@@ -91,11 +90,13 @@ public:
             
             capacity = other.capacity;
             numElements = 0;
-            buckets.clear();
-            buckets.resize(capacity, nullptr);
+            buckets = Array<Node*>();
+            for (size_t i = 0; i < capacity; ++i) {
+                buckets.append(nullptr);
+            }
             
             for (size_t i = 0; i < other.capacity; ++i) {
-                Node* current = other.buckets[i];
+                Node* current = other.buckets.at(i);
                 while (current != nullptr) {
                     insert(current->key, current->value);
                     current = current->next;
@@ -108,23 +109,20 @@ public:
     void insert(const K& key, const V& value) {
         size_t index = hash(key);
         
-        // Check if key already exists
-        Node* current = buckets[index];
+        Node* current = buckets.at(index);
         while (current != nullptr) {
             if (current->key == key) {
-                current->value = value; // Update existing value
+                current->value = value; 
                 return;
             }
             current = current->next;
         }
         
-        // Insert new node at the beginning of the chain
         Node* newNode = new Node(key, value);
-        newNode->next = buckets[index];
-        buckets[index] = newNode;
+        newNode->next = buckets.at(index);
+        buckets.at(index) = newNode;
         numElements++;
         
-        // Check load factor and rehash if necessary
         if (static_cast<double>(numElements) / capacity > LOAD_FACTOR_THRESHOLD) {
             rehash();
         }
@@ -132,7 +130,7 @@ public:
     
     bool find(const K& key) const {
         size_t index = hash(key);
-        Node* current = buckets[index];
+        Node* current = buckets.at(index);
         
         while (current != nullptr) {
             if (current->key == key) {
@@ -146,7 +144,7 @@ public:
     
     const V& at(const K& key) const {
         size_t index = hash(key);
-        Node* current = buckets[index];
+        Node* current = buckets.at(index);
         
         while (current != nullptr) {
             if (current->key == key) {
@@ -160,7 +158,7 @@ public:
     
     V* getPointer(const K& key) {
         size_t index = hash(key);
-        Node* current = buckets[index];
+        Node* current = buckets.at(index);
         
         while (current != nullptr) {
             if (current->key == key) {
@@ -174,7 +172,7 @@ public:
     
     const V* getPointer(const K& key) const {
         size_t index = hash(key);
-        Node* current = buckets[index];
+        Node* current = buckets.at(index);
         
         while (current != nullptr) {
             if (current->key == key) {
@@ -188,13 +186,13 @@ public:
     
     void remove(const K& key) {
         size_t index = hash(key);
-        Node* current = buckets[index];
+        Node* current = buckets.at(index);
         Node* prev = nullptr;
         
         while (current != nullptr) {
             if (current->key == key) {
                 if (prev == nullptr) {
-                    buckets[index] = current->next;
+                    buckets.at(index) = current->next;
                 } else {
                     prev->next = current->next;
                 }
@@ -215,11 +213,10 @@ public:
         return numElements == 0;
     }
     
-    // Get all keys
-    Array getAllKeys() const {
-        Array keys;
+    Array<K> getAllKeys() const {
+        Array<K> keys;
         for (size_t i = 0; i < capacity; ++i) {
-            Node* current = buckets[i];
+            Node* current = buckets.at(i);
             while (current != nullptr) {
                 keys.append(current->key);
                 current = current->next;
@@ -228,5 +225,3 @@ public:
         return keys;
     }
 };
-
-} // namespace adt

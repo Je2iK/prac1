@@ -1,22 +1,49 @@
 #include "Database.hpp"
 #include <filesystem>
+#include <fstream>
+#include <thread>
+#include <chrono>
 
-namespace docdb {
 
-// Конструктор базы данных - инициализация таблиц из схемы
-Database::Database(const Schema& schema) : schema_(schema) {
+Database::Database(const Schema& schema) : schema(schema) {
     initializeStorage();
-    adt::Array table_names = schema_.getTableNames(); 
-    for(size_t i = 0; i < table_names.size(); ++i) {
+    lockFile = filesystem::path(schema.name) / ".db_lock";
+    lock();
+    
+    Array<string> table_names = schema.getTableNames(); 
+    for(size_t i = 0; i < table_names.getSize(); ++i) {
         const string& tableName = table_names.at(i);
-        const auto& tableColumns = schema_.structure.at(tableName);
+        const auto& tableColumns = schema.structure.at(tableName);
 
         TableConfig config;
         config.name = tableName;
-        config.tuplesLimit = schema_.tuplesLimit;
-        config.basePath = filesystem::path(schema_.name) / tableName;
+        config.tuplesLimit = schema.tuplesLimit;
+        config.basePath = filesystem::path(schema.name) / tableName;
         config.columns = tableColumns;
-        tables_.insert(tableName, Table(config));
+        tables.insert(tableName, Table(config));
+    }
+}
+
+Database::~Database() {
+    unlock();
+}
+
+void Database::lock() {
+    int retries = 0;
+    while (filesystem::exists(lockFile)) {
+        this_thread::sleep_for(chrono::milliseconds(100));
+        retries++;
+        if (retries > 50) {
+            throw runtime_error("Database is locked by another process");
+        }
+    }
+    ofstream f(lockFile);
+    f << "locked";
+}
+
+void Database::unlock() {
+    if (filesystem::exists(lockFile)) {
+        filesystem::remove(lockFile);
     }
 }
 
@@ -24,7 +51,7 @@ Table& Database::getTable(const string& name) {
     if (!hasTable(name)) {
         throw runtime_error("Table not found: " + name);
     }
-    Table* ptr = tables_.getPointer(name);
+    Table* ptr = tables.getPointer(name);
     if (ptr == nullptr) {
         throw runtime_error("Table not found: " + name);
     }
@@ -32,19 +59,19 @@ Table& Database::getTable(const string& name) {
 }
 
 bool Database::hasTable(const string& name) const {
-    return tables_.find(name);
+    return tables.find(name);
 }
 
-adt::Array Database::getTableNames() const {
-    return tables_.getAllKeys();
+Array<string> Database::getTableNames() const {
+    return tables.getAllKeys();
 }
 
 void Database::initializeStorage() {
-    filesystem::create_directories(schema_.name);
+    filesystem::create_directories(schema.name);
 }
 
 string Database::getSchemaName() const {
-    return schema_.name;
+    return schema.name;
 }
 
-}
+

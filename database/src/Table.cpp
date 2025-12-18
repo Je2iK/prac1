@@ -6,42 +6,38 @@
 #include <chrono>
 #include <iostream>
 
-namespace docdb {
 
-// Конструктор таблицы - инициализация путей и файлов
-Table::Table(const TableConfig & config) : config_(config) {
-    filesystem::create_directories(config_.basePath);
-    pkColumnName_ = config_.name + "_pk";
-    pkSequenceFile_ = config_.basePath / (config_.name + "_pk_sequence");
-    lockFile_ = config_.basePath / (config_.name + "_lock");
+Table::Table(const TableConfig & config) : config(config) {
+    filesystem::create_directories(config.basePath);
+    pkColumnName = config.name + "_pk";
+    pkSequenceFile = config.basePath / (config.name + "_pk_sequence");
+    lockFile = config.basePath / (config.name + "_lock");
     
-    if (!filesystem::exists(pkSequenceFile_)) {
-        ofstream f(pkSequenceFile_);
+    if (!filesystem::exists(pkSequenceFile)) {
+        ofstream f(pkSequenceFile);
         f << 0;
     }
 }
 
-// Блокировка таблицы для конкурентного доступа
 void Table::lock() {
     int retries = 0;
-    while (filesystem::exists(lockFile_)) {
+    while (filesystem::exists(lockFile)) {
         this_thread::sleep_for(chrono::milliseconds(10));
         retries++;
         if (retries > 1000) {
              throw runtime_error("Table lock timeout");
         }
     }
-    ofstream f(lockFile_);
+    ofstream f(lockFile);
     f << "locked";
 }
 
 void Table::unlock() {
-    filesystem::remove(lockFile_);
+    filesystem::remove(lockFile);
 }
 
-// Получение и инкремент следующего ID для первичного ключа
 size_t Table::getNextId() {
-    ifstream ifile(pkSequenceFile_);
+    ifstream ifile(pkSequenceFile);
     size_t id = 0;
     if (ifile.is_open()) {
         ifile >> id;
@@ -49,30 +45,31 @@ size_t Table::getNextId() {
     id++;
     ifile.close();
     
-    ofstream ofile(pkSequenceFile_);
+    ofstream ofile(pkSequenceFile);
     ofile << id;
     return id;
 }
 
-const vector<string>& Table::getColumns() const {
-    return config_.columns;
+const Array<string>& Table::getColumns() const {
+    return config.columns;
 }
 
 string Table::getPkColumnName() const {
-    return pkColumnName_;
+    return pkColumnName;
 }
 
-// Вставка новой строки в таблицу
-void Table::insert(const vector<string>& values) {
+void Table::insert(const Array<string>& values) {
     lock();
     try {
         size_t id = getNextId();
-        vector<string> fullRow;
-        fullRow.push_back(to_string(id));
-        fullRow.insert(fullRow.end(), values.begin(), values.end());
+        Array<string> fullRow;
+        fullRow.append(to_string(id));
+        for (size_t i = 0; i < values.getSize(); ++i) {
+            fullRow.append(values.at(i));
+        }
 
-        if (fullRow.size() != config_.columns.size() + 1) {
-            throw runtime_error("Column count mismatch. Expected " + to_string(config_.columns.size()) + " values, got " + to_string(values.size()));
+        if (fullRow.getSize() != config.columns.getSize() + 1) {
+            throw runtime_error("Column count mismatch. Expected " + to_string(config.columns.getSize()) + " values, got " + to_string(values.getSize()));
         }
         
         filesystem::path file = getCurrentDataFilePath();
@@ -80,16 +77,16 @@ void Table::insert(const vector<string>& values) {
         
         ofstream f(file, ios::app);
         if (newFile) {
-            f << pkColumnName_;
-            for (const auto& col : config_.columns) {
-                f << "," << col;
+            f << pkColumnName;
+            for (size_t i = 0; i < config.columns.getSize(); ++i) {
+                f << "," << config.columns.at(i);
             }
             f << "\n";
         }
         
-        for (size_t i = 0; i < fullRow.size(); ++i) {
+        for (size_t i = 0; i < fullRow.getSize(); ++i) {
             if (i > 0) f << ",";
-            f << fullRow[i];
+            f << fullRow.at(i);
         }
         f << "\n";
         
@@ -100,12 +97,11 @@ void Table::insert(const vector<string>& values) {
     unlock();
 }
 
-// Полное сканирование всех строк таблицы
-vector<vector<string>> Table::scan() {
-    vector<vector<string>> allRows;
+Array<Array<string>> Table::scan() {
+    Array<Array<string>> allRows;
     auto files = getDataFiles();
-    for (const auto& file : files) {
-        ifstream f(file);
+    for (size_t i = 0; i < files.getSize(); ++i) {
+        ifstream f(files.at(i));
         string line;
         bool header = true;
         while (getline(f, line)) {
@@ -115,31 +111,32 @@ vector<vector<string>> Table::scan() {
                 continue;
             }
             
-            vector<string> row;
+            Array<string> row;
             stringstream ss(line);
             string cell;
             while (getline(ss, cell, ',')) {
-                row.push_back(cell);
+                row.append(cell);
             }
-            allRows.push_back(row);
+            allRows.append(row);
         }
     }
     return allRows;
 }
 
-// Удаление строк по предикату
-void Table::deleteRows(const function<bool(const vector<string>&, const vector<string>&)>& predicate) {
+void Table::deleteRows(const function<bool(const Array<string>&, const Array<string>&)>& predicate) {
     lock();
     try {
         auto files = getDataFiles();
-        vector<string> allColumns;
-        allColumns.push_back(pkColumnName_);
-        allColumns.insert(allColumns.end(), config_.columns.begin(), config_.columns.end());
+        Array<string> allColumns;
+        allColumns.append(pkColumnName);
+        for (size_t i = 0; i < config.columns.getSize(); ++i) {
+            allColumns.append(config.columns.at(i));
+        }
 
-        for (const auto& file : files) {
-            ifstream f(file);
+        for (size_t i = 0; i < files.getSize(); ++i) {
+            ifstream f(files.at(i));
             string line;
-            vector<string> linesToKeep;
+            Array<string> linesToKeep;
             bool header = true;
             string headerLine;
             bool modified = false;
@@ -152,15 +149,15 @@ void Table::deleteRows(const function<bool(const vector<string>&, const vector<s
                     continue;
                 }
                 
-                vector<string> row;
+                Array<string> row;
                 stringstream ss(line);
                 string cell;
                 while (getline(ss, cell, ',')) {
-                    row.push_back(cell);
+                    row.append(cell);
                 }
                 
                 if (!predicate(row, allColumns)) {
-                    linesToKeep.push_back(line);
+                    linesToKeep.append(line);
                 } else {
                     modified = true;
                 }
@@ -168,10 +165,10 @@ void Table::deleteRows(const function<bool(const vector<string>&, const vector<s
             f.close();
             
             if (modified) {
-                ofstream of(file);
+                ofstream of(files.at(i));
                 of << headerLine << "\n";
-                for (const auto& l : linesToKeep) {
-                    of << l << "\n";
+                for (size_t j = 0; j < linesToKeep.getSize(); ++j) {
+                    of << linesToKeep.at(j) << "\n";
                 }
             }
         }
@@ -182,17 +179,16 @@ void Table::deleteRows(const function<bool(const vector<string>&, const vector<s
     unlock();
 }
 
-// Получение списка CSV файлов таблицы
-vector<filesystem::path> Table::getDataFiles() const {
-    vector<filesystem::path> files;
-    if (!filesystem::exists(config_.basePath)) return files;
+Array<filesystem::path> Table::getDataFiles() const {
+    Array<filesystem::path> files;
+    if (!filesystem::exists(config.basePath)) return files;
 
-    for (const auto& entry : filesystem::directory_iterator(config_.basePath)) {
+    for (const auto& entry : filesystem::directory_iterator(config.basePath)) {
         if (entry.path().extension() == ".csv") {
-            files.push_back(entry.path());
+            files.append(entry.path());
         }
     }
-    sort(files.begin(), files.end(), [](const filesystem::path& a, const filesystem::path& b) {
+    files.sort([](const filesystem::path& a, const filesystem::path& b) {
         string sa = a.stem().string();
         string sb = b.stem().string();
         try {
@@ -204,12 +200,11 @@ vector<filesystem::path> Table::getDataFiles() const {
     return files;
 }
 
-// Подсчёт строк в текущем файле
 size_t Table::getCurrentFileRowCount() const {
     auto files = getDataFiles();
     if (files.empty()) return 0;
     
-    ifstream f(files.back());
+    ifstream f(files.at(files.getSize() - 1));
     size_t lines = 0;
     string line;
     while (getline(f, line)) {
@@ -218,21 +213,20 @@ size_t Table::getCurrentFileRowCount() const {
     return lines > 0 ? lines - 1 : 0;
 }
 
-// Определение пути для текущего CSV файла (с учётом переполнения)
 filesystem::path Table::getCurrentDataFilePath() const {
     auto files = getDataFiles();
-    if (files.empty()) return config_.basePath / "1.csv";
+    if (files.empty()) return config.basePath / "1.csv";
     
-    if (getCurrentFileRowCount() >= config_.tuplesLimit) {
-        string stem = files.back().stem().string();
+    if (getCurrentFileRowCount() >= config.tuplesLimit) {
+        string stem = files.at(files.getSize() - 1).stem().string();
         try {
             int nextNum = stoi(stem) + 1;
-            return config_.basePath / (to_string(nextNum) + ".csv");
+            return config.basePath / (to_string(nextNum) + ".csv");
         } catch (...) {
-            return config_.basePath / "1_new.csv"; 
+            return config.basePath / "1_new.csv"; 
         }
     }
-    return files.back();
+    return files.at(files.getSize() - 1);
 }
 
-}
+
