@@ -1,41 +1,40 @@
-# Компилятор C++
 CXX = g++
-# Флаги компиляции: C++17, отладочная информация, все предупреждения
-CXXFLAGS = -std=c++17 -g -Wall -Wextra -Iinclude -Ithird_party/json/include
-# Директория для объектных файлов
+CXXFLAGS = -std=c++17 -g -Wall -Wextra -Iinclude -Ithird_party/json/include -pthread
 OBJDIR = obj
-# Директория для исходных файлов
 SRCDIR = src
-# Директория для самописных АТД
 ADTDIR = adt
 
-# Имена исходных файлов в src/
-SOURCES = $(wildcard $(SRCDIR)/*.cpp)
-# Имена объектных файлов в obj/ (заменяем .cpp на .o)
-OBJECTS = $(SOURCES:$(SRCDIR)/%.cpp=$(OBJDIR)/%.o)
-# Имя исполняемого файла
-TARGET = database
+CONSOLE_SOURCES = $(SRCDIR)/main.cpp $(SRCDIR)/Database.cpp $(SRCDIR)/Schema.cpp $(SRCDIR)/Table.cpp
+CONSOLE_OBJECTS = $(CONSOLE_SOURCES:$(SRCDIR)/%.cpp=$(OBJDIR)/%.o)
 
-# Цель по умолчанию - сборка исполняемого файла
-all: $(TARGET)
+SERVER_SOURCES = $(SRCDIR)/server.cpp $(SRCDIR)/Database.cpp $(SRCDIR)/Schema.cpp $(SRCDIR)/Table.cpp
+SERVER_OBJECTS = $(SERVER_SOURCES:$(SRCDIR)/%.cpp=$(OBJDIR)/%.o)
 
-# Правило для сборки исполняемого файла из всех объектных файлов
-$(TARGET): $(OBJECTS)
-	$(CXX) $(OBJECTS) -o $@
+CLIENT_SOURCES = $(SRCDIR)/client.cpp
+CLIENT_OBJECTS = $(CLIENT_SOURCES:$(SRCDIR)/%.cpp=$(OBJDIR)/%.o)
 
-# Правило для компиляции каждого объектного файла
-# $@ - это имя цели (например, obj/main.o)
-# $< - это первый зависимый файл (например, src/main.cpp)
+CONSOLE_TARGET = database
+SERVER_TARGET = database-server
+CLIENT_TARGET = database-client
+
+all: $(CONSOLE_TARGET) $(SERVER_TARGET) $(CLIENT_TARGET)
+
+$(CONSOLE_TARGET): $(CONSOLE_OBJECTS)
+	$(CXX) $(CONSOLE_OBJECTS) -o $@
+
+$(SERVER_TARGET): $(SERVER_OBJECTS)
+	$(CXX) $(SERVER_OBJECTS) -o $@ -pthread
+
+$(CLIENT_TARGET): $(CLIENT_OBJECTS)
+	$(CXX) $(CLIENT_OBJECTS) -o $@
+
 $(OBJDIR)/%.o: $(SRCDIR)/%.cpp | $(OBJDIR)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-# Создание директории obj, если она не существует
 $(OBJDIR):
 	mkdir -p $(OBJDIR)
 
-# Цель для очистки - удаления объектных файлов и исполняемого файла
 clean:
-	rm -rf $(OBJDIR) $(TARGET)
+	rm -rf $(OBJDIR) $(CONSOLE_TARGET) $(SERVER_TARGET) $(CLIENT_TARGET)
 
-# Фантомная цель - не создает файл, просто указывает зависимость от clean
 .PHONY: all clean

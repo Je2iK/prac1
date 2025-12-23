@@ -7,12 +7,19 @@
 #include <filesystem>
 #include <fstream>
 #include <signal.h>
+#include <thread>
+#include <mutex>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <unistd.h>
+#include <cstring>
 #include "../adt/Array.hpp"
 #include "../adt/ChainingHashTable.hpp"
 
 using namespace std;
 
 string g_lockFile;
+mutex g_dbMutex;
 
 void signalHandler(int) {
     if (!g_lockFile.empty() && filesystem::exists(g_lockFile)) {
@@ -71,11 +78,6 @@ string stripQuotes(const string& s) {
     return s;
 }
 
-struct Condition {
-    string lhs;
-    string rhs;
-};
-
 bool evaluateExpression(const Array<string>& tokens, size_t& pos, const ChainingHashTable<string, string>& rowData);
 
 string getOperandValue(const string& operand, const ChainingHashTable<string, string>& rowData) {
@@ -132,8 +134,8 @@ bool evaluateExpression(const Array<string>& tokens, size_t& pos, const Chaining
     return left;
 }
 
-void processSelect(const Array<string>& tokens, Database& db) {
-    cout << "Executing SELECT query..." << endl;
+string processSelect(const Array<string>& tokens, Database& db) {
+    stringstream result;
     
     size_t pos = 1;
     Array<string> projection;
@@ -145,8 +147,7 @@ void processSelect(const Array<string>& tokens, Database& db) {
     }
     
     if (pos >= tokens.getSize() || tokens.at(pos) != "FROM") {
-        cout << "Error: Expected FROM\n";
-        return;
+        return "Error: Expected FROM\n";
     }
     pos++;
     
@@ -177,8 +178,7 @@ void processSelect(const Array<string>& tokens, Database& db) {
     for (size_t i = 0; i < tableNames.getSize(); ++i) {
         const string& tName = tableNames.at(i);
         if (!db.hasTable(tName)) {
-            cout << "Error: Table " << tName << " not found\n";
-            return;
+            return "Error: Table " + tName + " not found\n";
         }
         Table& table = db.getTable(tName);
         TableInfo tInfo;
@@ -237,14 +237,14 @@ void processSelect(const Array<string>& tokens, Database& db) {
             
             if (match) {
                 for (size_t i = 0; i < projection.getSize(); ++i) {
-                    if (i > 0) cout << ",";
+                    if (i > 0) result << ",";
                     if (currentRow.find(projection.at(i))) {
-                        cout << currentRow.at(projection.at(i));
+                        result << currentRow.at(projection.at(i));
                     } else {
-                        cout << "NULL";
+                        result << "NULL";
                     }
                 }
-                cout << "\n";
+                result << "\n";
             }
             return;
         }
@@ -277,17 +277,16 @@ void processSelect(const Array<string>& tokens, Database& db) {
     };
     
     processCartesian(0, ChainingHashTable<string, string>());
+    return result.str();
 }
 
-void processInsert(const Array<string>& tokens, Database& db) {
+string processInsert(const Array<string>& tokens, Database& db) {
     if (tokens.getSize() < 6 || tokens.at(1) != "INTO" || tokens.at(3) != "VALUES") {
-        cout << "Error: Invalid INSERT syntax\n";
-        return;
+        return "Error: Invalid INSERT syntax\n";
     }
     string tableName = tokens.at(2);
     if (!db.hasTable(tableName)) {
-        cout << "Error: Table " << tableName << " not found\n";
-        return;
+        return "Error: Table " + tableName + " not found\n";
     }
     
     Array<string> values;
@@ -301,21 +300,19 @@ void processInsert(const Array<string>& tokens, Database& db) {
     
     try {
         db.getTable(tableName).insert(values);
-        cout << "Inserted 1 row\n";
+        return "Inserted 1 row\n";
     } catch (const exception& e) {
-        cout << "Error: " << e.what() << "\n";
+        return string("Error: ") + e.what() + "\n";
     }
 }
 
-void processDelete(const Array<string>& tokens, Database& db) {
+string processDelete(const Array<string>& tokens, Database& db) {
     if (tokens.getSize() < 3 || tokens.at(1) != "FROM") {
-        cout << "Error: Invalid DELETE syntax\n";
-        return;
+        return "Error: Invalid DELETE syntax\n";
     }
     string tableName = tokens.at(2);
     if (!db.hasTable(tableName)) {
-        cout << "Error: Table " << tableName << " not found\n";
-        return;
+        return "Error: Table " + tableName + " not found\n";
     }
     
     Array<string> whereTokens;
@@ -327,8 +324,6 @@ void processDelete(const Array<string>& tokens, Database& db) {
     
     try {
         Table& table = db.getTable(tableName);
-        auto cols = table.getColumns();
-        string pk = table.getPkColumnName();
         
         table.deleteRows([&](const Array<string>& row, const Array<string>& colNames) {
             if (whereTokens.empty()) return true;
@@ -343,10 +338,57 @@ void processDelete(const Array<string>& tokens, Database& db) {
             size_t p = 0;
             return evaluateExpression(whereTokens, p, rowMap);
         });
-        cout << "Deleted rows\n";
+        return "Deleted rows\n";
     } catch (const exception& e) {
-        cout << "Error: " << e.what() << "\n";
+        return string("Error: ") + e.what() + "\n";
     }
+}
+
+string executeQuery(const string& query, Database& db) {
+    if (query.empty()) return "";
+    
+    auto tokens = tokenize(query);
+    if (tokens.empty()) return "";
+    
+    string cmd = tokens.at(0);
+    transform(cmd.begin(), cmd.end(), cmd.begin(), ::toupper);
+    
+    if (cmd == "SELECT") {
+        return processSelect(tokens, db);
+    }
+    
+    lock_guard<mutex> lock(g_dbMutex);
+    
+     if (cmd == "INSERT") {
+        return processInsert(tokens, db);
+    } else if (cmd == "DELETE") {
+        return processDelete(tokens, db);
+    } else {
+        return "Unknown command: " + cmd + "\n";
+    }
+}
+
+void handleClient(int clientSocket, Database& db) {
+    char buffer[4096];
+    while (true) {
+        memset(buffer, 0, sizeof(buffer));
+        ssize_t bytesRead = recv(clientSocket, buffer, sizeof(buffer) - 1, 0);
+        
+        if (bytesRead <= 0) break;
+        
+        string query(buffer);
+        query.erase(query.find_last_not_of(" \n\r\t") + 1);
+        
+        if (query == "quit") {
+            send(clientSocket, "пока!\n", 9, 0);
+            break;
+        }
+        
+        string result = executeQuery(query, db);
+        send(clientSocket, result.c_str(), result.length(), 0);
+    }
+    
+    close(clientSocket);
 }
 
 int main() {
@@ -357,7 +399,7 @@ int main() {
         
         signal(SIGINT, signalHandler);
         signal(SIGTERM, signalHandler);
-        ;
+        
         cout << "Schema: " << schema.name << endl;
         cout << "Available tables: ";
         auto tableNames = db.getTableNames();
@@ -365,43 +407,52 @@ int main() {
             cout << tableNames.at(i);
             if (i < tableNames.getSize() - 1) cout << ", ";
         }
-        cout << endl << endl;
+        cout << endl;
         
-    
-        
-        string line;
-        while (true) {
-            cout << "db> ";
-            if (!getline(cin, line)) break;
-            if (line == "exit" || line == "quit") {
-                cout << "Goodbye!" << endl;
-                break;
-            }
-            if (line.empty()) continue;
-            
-            auto tokens = tokenize(line);
-            if (tokens.empty()) continue;
-            
-            string cmd = tokens.at(0);
-            transform(cmd.begin(), cmd.end(), cmd.begin(), ::toupper);
-            
-            if (cmd == "SELECT") {
-                processSelect(tokens, db);
-            } else if (cmd == "INSERT") {
-                processInsert(tokens, db);
-            } else if (cmd == "DELETE") {
-                processDelete(tokens, db);
-            } else {
-                cout << "Unknown command: " << cmd << endl;
-                cout << "Available commands: SELECT, INSERT, DELETE, exit" << endl;
-            }
+        int serverSocket = socket(AF_INET, SOCK_STREAM, 0);
+        if (serverSocket < 0) {
+            cerr << "Ошибка создания сокета\n";
+            return 1;
         }
+        
+        int opt = 1;
+        setsockopt(serverSocket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+        
+        sockaddr_in serverAddr{};
+        serverAddr.sin_family = AF_INET;
+        serverAddr.sin_addr.s_addr = INADDR_ANY;
+        serverAddr.sin_port = htons(7432);
+        
+        if (bind(serverSocket, (sockaddr*)&serverAddr, sizeof(serverAddr)) < 0) {
+            cerr << "не удалось подключиться к 7432 порту\n";
+            close(serverSocket);
+            return 1;
+        }
+        
+        if (listen(serverSocket, 10) < 0) {
+            cerr << "не прослушивается\n";
+            close(serverSocket);
+            return 1;
+        }
+        
+        cout << "Сервер запущен на 7432 порту\n";
+        
+        while (true) {
+            sockaddr_in clientAddr{};
+            socklen_t clientLen = sizeof(clientAddr);
+            int clientSocket = accept(serverSocket, (sockaddr*)&clientAddr, &clientLen);
+            
+            if (clientSocket < 0) continue;
+            
+            thread(handleClient, clientSocket, ref(db)).detach();
+        }
+        
+        close(serverSocket);
         g_lockFile = "";
     } catch (const exception& e) {
-        cerr << "Fatal Error: " << e.what() << "\n";
+        cerr << "Ошибка: " << e.what() << "\n";
         g_lockFile = "";
         return 1;
     }
     return 0;
 }
-
